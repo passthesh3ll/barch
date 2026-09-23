@@ -1,18 +1,23 @@
 #!/bin/bash
-# name: barch
-# description: a basic arch installer in bash
-# author: passthesh3ll
-# license: GPL3
+###############################################
+# name: barch                                 #
+# description: a basic arch installer in bash #
+# author: passthesh3ll                        #
+# license: GPL3                               #
+###############################################
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 set -euo pipefail
-trap 'echo -e "\e[31m[ERROR]\e[0m line $LINENO: $BASH_COMMAND" >&2' ERR
-GREEN='\e[32m'
+LPURPLE='\e[95m'
+DPURPLE='\e[35m'
+RED='\e[31m'
 YELLOW='\e[33m'
 NC='\e[0m'
+trap 'echo -e "\e[31m[ERROR]\e[0m line $LINENO: $BASH_COMMAND" >&2' ERR
 SECONDS=0
-step() { echo -e "${YELLOW}=> $*${NC}"; }
-sect() { echo -e "\n${GREEN}═══════ [$*] ═══════${NC}"; }
+step() { echo -e "${DPURPLE}=> $*${NC}"; }
+sect() { echo -e "\n${LPURPLE}═══════ [$*] ═══════${NC}"; }
 
 # ─── Installation Variables ───────────────────────────────────────────────────
 HOST_NAME="computer"
@@ -47,18 +52,82 @@ AUR=true
 # S T A R T
 # ═══════════════════════════════════════════════════════════════════════════════
 echo
-echo -e "${GREEN}        ╭─────────╮       ${NC}"
-echo -e "${GREEN}        │  BARCH  │       ${NC}"
-echo -e "${GREEN}        ╰─────────╯       ${NC}"
-echo -e "${GREEN}       a basic arch       ${NC}"
-echo -e "${GREEN}     installer in bash    ${NC}"
+echo -e "${DPURPLE}        ╭─────────╮       ${NC}"
+echo -e "${DPURPLE}        │  BARCH  │       ${NC}"
+echo -e "${DPURPLE}        ╰─────────╯       ${NC}"
+echo -e "${DPURPLE}       a basic arch       ${NC}"
+echo -e "${DPURPLE}     installer in bash    ${NC}"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# [0.0] HARDWARE DETECTION
+# [0.0] CONFIGURATION CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
-sect "0.0" "Detecting Hardware"
+sect "0.0" "Checking Configuration"
 
-# ─── CPU microcode ────────────────────────────────────────────────────────────
+CHECK_ERRORS=0
+check_ok()   { echo -e "${LPURPLE}[ OK ]${NC} $*"; }
+check_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
+check_err()  { echo -e "${RED}[FAIL]${NC} $*"; CHECK_ERRORS=$((CHECK_ERRORS + 1)); }
+
+# ─── Environment ──────────────────────────────────────────────────────────────
+(( EUID == 0 )) || check_err "the script must be run as root"
+[[ -d /sys/firmware/efi ]] || check_err "system is not booted in UEFI mode"
+curl -fsS --max-time 3 https://archlinux.org >/dev/null || check_warn "no internet connection"
+
+# ─── Required variables ───────────────────────────────────────────────────────
+for VAR in HOST_NAME USER_NAME USER_PASS ROOT_PASS DISK FILESYSTEM LUKS_PASS SWAP \
+           TIMEZONE LOCALE KEYBOARD MIRRORS DESKTOP; do
+    [[ -n "${!VAR:-}" ]] || check_err "$VAR is empty"
+done
+
+# ─── Disk ─────────────────────────────────────────────────────────────────────
+[[ -b "$DISK" ]] || check_err "DISK '$DISK' is not a block device"
+
+# ─── Filesystem ───────────────────────────────────────────────────────────────
+[[ "$FILESYSTEM" =~ ^(ext4|btrfs)$ ]] || \
+    check_err "FILESYSTEM must be 'ext4' or 'btrfs' (got '$FILESYSTEM')"
+
+# ─── Swap ─────────────────────────────────────────────────────────────────────
+[[ "$SWAP" == "auto" || "$SWAP" == "false" || "$SWAP" =~ ^[0-9]+$ ]] || \
+    check_err "SWAP must be 'auto', 'false' or a size in MiB (got '$SWAP')"
+
+# ─── Desktop ──────────────────────────────────────────────────────────────────
+[[ "$DESKTOP" =~ ^(xfce|kde|gnome|cinnamon|mate|lxqt|none)$ ]] || \
+    check_err "unknown DESKTOP '$DESKTOP' (xfce|kde|gnome|cinnamon|mate|lxqt|none)"
+
+# ─── Username ─────────────────────────────────────────────────────────────────
+[[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || check_err "invalid USER_NAME '$USER_NAME'"
+
+# ─── Booleans ─────────────────────────────────────────────────────────────────
+for VAR in DARK_THEME EXTRA_THEMES BLUETOOTH PRINTING NIGHT_LIGHT \
+           INSTALL_CPU_UCODE INSTALL_GPU_DRIVERS VIRTUALBOX_GUEST_UTILS OS_PROBER AUR; do
+    [[ "${!VAR:-}" =~ ^(true|false)$ ]] || \
+        check_err "$VAR must be 'true' or 'false' (got '${!VAR:-}')"
+done
+
+# ─── Timezone / locale / keymap ───────────────────────────────────────────────
+[[ -f "/usr/share/zoneinfo/${TIMEZONE}" ]] || check_err "TIMEZONE '$TIMEZONE' not found"
+grep -qE "^#?${LOCALE} " /etc/locale.gen || check_warn "LOCALE '$LOCALE' not listed in /etc/locale.gen"
+localectl list-keymaps 2>/dev/null | grep -qx "$KEYBOARD" || check_warn "KEYBOARD '$KEYBOARD' not found"
+
+# ─── Night light coordinates ──────────────────────────────────────────────────
+if [[ "$NIGHT_LIGHT" == true ]]; then
+    [[ "$NIGHT_LIGHT_LATITUDE"  =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || \
+        check_err "NIGHT_LIGHT_LATITUDE is not numeric ('$NIGHT_LIGHT_LATITUDE')"
+    [[ "$NIGHT_LIGHT_LONGITUDE" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || \
+        check_err "NIGHT_LIGHT_LONGITUDE is not numeric ('$NIGHT_LIGHT_LONGITUDE')"
+fi
+
+# ─── Default passwords ────────────────────────────────────────────────────────
+[[ "$USER_PASS" == changeme || "$ROOT_PASS" == changeme || "$LUKS_PASS" == changeme ]] && \
+    check_warn "one or more passwords are still 'changeme'"
+
+# ─── Result ───────────────────────────────────────────────────────────────────
+if (( CHECK_ERRORS > 0 )); then
+    echo -e "${RED}[ERROR]${NC} ${CHECK_ERRORS} configuration problem(s) found, aborting" >&2
+    exit 1
+fi
+
+# ─── CPU detection ────────────────────────────────────────────────────────────
 if [[ "$INSTALL_CPU_UCODE" == true ]]; then
     step "[0.1] Detecting CPU"
     case $(grep -m1 'vendor_id' /proc/cpuinfo | awk '{print $3}') in
@@ -94,28 +163,13 @@ else
     GPU_DRIVER="none"
     GPU_PACKAGES=()
     [[ "$DESKTOP" != "none" ]] && \
-        echo -e "\e[33m[WARN]\e[0m DESKTOP=$DESKTOP but GPU drivers disabled: the GUI may not work"
+        echo -e "${YELLOW}[WARN]${NC} DESKTOP=$DESKTOP but GPU drivers disabled: the GUI may not work"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # [1.0] DISK PREPARATION
 # ═══════════════════════════════════════════════════════════════════════════════
 sect "1.0" "Formatting Disk"
-
-# ─── Filesystem check ─────────────────────────────────────────────────────────
-case "$FILESYSTEM" in
-    ext4|btrfs) ;;
-    *)
-        echo -e "\e[31m[ERROR]\e[0m Unknown FILESYSTEM: '$FILESYSTEM'" >&2
-        exit 1
-        ;;
-esac
-
-# ─── Swap check ───────────────────────────────────────────────────────────────
-if [[ "$SWAP" != "auto" && "$SWAP" != "false" && ! "$SWAP" =~ ^[0-9]+$ ]]; then
-    echo -e "\e[31m[ERROR]\e[0m Invalid SWAP: '$SWAP' (use auto, false or size in MiB)" >&2
-    exit 1
-fi
 
 # ─── System clock ─────────────────────────────────────────────────────────────
 step "[1.1] Syncing system clock"
@@ -185,7 +239,21 @@ sect "2.0" "Installing Base OS"
 
 # ─── Pacman mirrors ───────────────────────────────────────────────────────────
 step "[2.1] Configuring pacman mirrors"
-reflector -c "$MIRRORS" -a 6 --sort rate --save /etc/pacman.d/mirrorlist
+cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
+reflector \
+    --country "$MIRRORS" \
+    --age 12 \
+    --protocol https \
+    --latest 10 \
+    --sort rate \
+    --connection-timeout 5 \
+    --download-timeout 5 \
+    --save /etc/pacman.d/mirrorlist || true
+if [[ ! -s /etc/pacman.d/mirrorlist ]]; then
+    echo -e "${YELLOW}[WARN]${NC} reflector produced no mirrors, restoring default mirrorlist"
+    cp /etc/pacman.d/mirrorlist.bak /etc/pacman.d/mirrorlist
+fi
+rm -f /etc/pacman.d/mirrorlist.bak
 
 # ─── Base system ──────────────────────────────────────────────────────────────
 step "[2.2] Installing base system"
@@ -415,7 +483,7 @@ case "$DESKTOP" in
     none)
         ;;
     *)
-        echo -e "\e[31m[ERROR]\e[0m Unknown DESKTOP: '$DESKTOP'" >&2
+        echo -e "${RED}[ERROR]${NC} Unknown DESKTOP: '$DESKTOP'" >&2
         exit 1
         ;;
 esac
@@ -582,15 +650,18 @@ if [[ "$DESKTOP" != "none" && "$DARK_THEME" == true ]]; then
 
     # ─── Papirus icons ────────────────────────────────────────────────────────
     step "[7.1] Installing Papirus icon theme"
-    arch-chroot /mnt pacman -S --noconfirm papirus-icon-theme gnome-themes-extra gtk-engine-murrine
+    THEME_PACKAGES=(papirus-icon-theme gnome-themes-extra)
+    [[ "$EXTRA_THEMES" == true ]] && THEME_PACKAGES+=(qt5ct qt6ct)
+    arch-chroot /mnt pacman -S --noconfirm "${THEME_PACKAGES[@]}"
     ICON_THEME="Papirus-Dark"
 
     # ─── Adwaita AMOLED theme ─────────────────────────────────────────────────
     if [[ "$EXTRA_THEMES" == true ]]; then
         step "[7.2] Installing Adwaita-AMOLED theme"
         AMOLED_DIR="/usr/share/themes/Adwaita-AMOLED"
-        git clone --depth 1 https://github.com/librerob/Adwaita-AMOLED "/mnt${AMOLED_DIR}"
-        rm -rf "/mnt${AMOLED_DIR}/.git"
+        mkdir -p "/mnt${AMOLED_DIR}"
+        curl -fsSL "https://codeload.github.com/librerob/Adwaita-AMOLED/tar.gz/HEAD" \
+            | tar -xz -C "/mnt${AMOLED_DIR}" --strip-components=1
 
         for HOME_DIR in "/mnt/etc/skel" "/mnt/home/${USER_NAME}"; do
             mkdir -p "$HOME_DIR/.config/gtk-4.0" \
@@ -609,6 +680,11 @@ if [[ "$DESKTOP" != "none" && "$DARK_THEME" == true ]]; then
         done
         arch-chroot /mnt chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.config"
 
+        # Qt theming via qt5ct (KDE and LXQt use their own platform theme)
+        if [[ "$DESKTOP" != "kde" && "$DESKTOP" != "lxqt" ]]; then
+            printf '%s\n' "QT_QPA_PLATFORMTHEME=qt5ct" >> /mnt/etc/environment
+        fi
+
         GTK_THEME_NAME="Adwaita-AMOLED"
     else
         GTK_THEME_NAME="Adwaita-dark"
@@ -617,7 +693,7 @@ if [[ "$DESKTOP" != "none" && "$DARK_THEME" == true ]]; then
     # ─── dconf system defaults ────────────────────────────────────────────────
     DCONF_USED=false
     case "$DESKTOP" in
-        kde|gnome|cinnamon|mate)
+        gnome|cinnamon|mate)
             DCONF_USED=true
             arch-chroot /mnt pacman -S --noconfirm --needed dconf
             mkdir -p /mnt/etc/dconf/profile /mnt/etc/dconf/db/local.d
@@ -633,16 +709,31 @@ EOF
     case "$DESKTOP" in
         # ─── XFCE ───────────────────────────────────────────────────────────
         xfce)
-            mkdir -p /mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml
-            cat <<EOF > /mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
+            XSETTINGS="/mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml"
+            if [[ -f "$XSETTINGS" ]]; then
+                # patch in place: preserves xfce4-settings defaults (Gtk/MenuImages, Xft, fonts...)
+                sed -i \
+                    -e "s|\(name=\"ThemeName\" type=\"string\" value=\"\)[^\"]*|\1${GTK_THEME_NAME}|" \
+                    -e "s|\(name=\"IconThemeName\" type=\"string\" value=\"\)[^\"]*|\1${ICON_THEME}|" \
+                    "$XSETTINGS"
+            else
+                mkdir -p "$(dirname "$XSETTINGS")"
+                cat <<EOF > "$XSETTINGS"
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xsettings" version="1.0">
   <property name="Net" type="empty">
     <property name="ThemeName" type="string" value="${GTK_THEME_NAME}"/>
     <property name="IconThemeName" type="string" value="${ICON_THEME}"/>
   </property>
+  <property name="Gtk" type="empty">
+    <property name="MenuImages" type="bool" value="true"/>
+    <property name="ButtonImages" type="bool" value="false"/>
+    <property name="FontName" type="string" value="Sans 10"/>
+    <property name="MonospaceFontName" type="string" value="Monospace 10"/>
+  </property>
 </channel>
 EOF
+            fi
             cat <<'EOF' > /mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfwm4" version="1.0">
@@ -667,12 +758,6 @@ EOF
 gtk-theme-name=${GTK_THEME_NAME}
 gtk-icon-theme-name=${ICON_THEME}
 gtk-application-prefer-dark-theme=true
-EOF
-            cat <<EOF > /mnt/etc/dconf/db/local.d/00-dark-theme
-[org/gnome/desktop/interface]
-color-scheme='prefer-dark'
-gtk-theme='${GTK_THEME_NAME}'
-icon-theme='${ICON_THEME}'
 EOF
             ;;
         # ─── GNOME ──────────────────────────────────────────────────────────
@@ -701,14 +786,16 @@ EOF
         mate)
             MATE_GTK_THEME="${GTK_THEME_NAME}"
             MATE_WM_THEME="Adwaita-AMOLED"
+            MATE_ICON_THEME="${ICON_THEME}"
             if [[ "$EXTRA_THEMES" != true ]]; then
                 MATE_GTK_THEME="BlackMATE"
                 MATE_WM_THEME="BlackMATE"
+                MATE_ICON_THEME="BlackMATE"
             fi
             cat <<EOF > /mnt/etc/dconf/db/local.d/00-dark-theme
 [org/mate/interface]
 gtk-theme='${MATE_GTK_THEME}'
-icon-theme='${ICON_THEME}'
+icon-theme='${MATE_ICON_THEME}'
 
 [org/mate/marco/general]
 theme='${MATE_WM_THEME}'
