@@ -5,12 +5,15 @@ the live ISO: GPT partitioning, LUKS encryption, LVM, ext4 or btrfs, GRUB,
 and an optional desktop environment with theming.
 
 ## Usage
-
 Boot the Arch live ISO, then:
-
-    vim barch.sh   # edit the variables at the top
+```bash
+    # download
+    curl -sLO https://raw.githubusercontent.com/passthesh3ll/barch/main/barch.sh
+    # edit variables
+    vim barch.sh
+    # install
     bash barch.sh
-
+```
 ## Variables
 
 All configuration is done via the variables at the top of the script.
