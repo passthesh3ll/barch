@@ -1,20 +1,14 @@
-        ╭─────────╮
-        │  BARCH  │
-        ╰─────────╯
-       a basic arch
-     installer in bash
-
 # barch
 
 A basic Arch Linux installer in bash. Automates a complete installation from
 the live ISO: GPT partitioning, LUKS encryption, LVM, ext4 or btrfs, GRUB,
-and an optional desktop environment with dark theming.
+and an optional desktop environment with theming.
 
 ## Usage
 
 Boot the Arch live ISO, then:
 
-    nano barch.sh   # edit the variables at the top
+    vim barch.sh   # edit the variables at the top
     bash barch.sh
 
 ## Variables
