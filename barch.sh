@@ -26,7 +26,9 @@ USER_PASS="changeme"
 ROOT_PASS="changeme"
 DISK="/dev/sda"
 FILESYSTEM="ext4"
+LUKS=true
 LUKS_PASS="changeme"
+LVM=true
 SWAP="auto"
 TIMEZONE="Europe/Rome"
 LOCALE="en_GB.UTF-8"
@@ -52,7 +54,7 @@ AUR=true
 # ═══════════════════════════════════════════════════════════════════════════════
 # S T A R T
 # ═══════════════════════════════════════════════════════════════════════════════
-BR="${LPURPLE}BARCH${DPURPLE}"
+BR="${LPURPLE}BARCH${NC}${DPURPLE}"
 echo
 echo -e "${DPURPLE}        ╭─────────╮       ${NC}"
 echo -e "${DPURPLE}        │  ${BR}  │       ${NC}"
@@ -75,7 +77,7 @@ check_err()  { echo -e "${RED}[FAIL]${NC} $*"; CHECK_ERRORS=$((CHECK_ERRORS + 1)
 curl -fsS --max-time 3 https://archlinux.org >/dev/null || check_warn "no internet connection"
 
 # ─── Required variables ───────────────────────────────────────────────────────
-for VAR in HOST_NAME USER_NAME USER_PASS ROOT_PASS DISK FILESYSTEM LUKS_PASS SWAP \
+for VAR in HOST_NAME USER_NAME USER_PASS ROOT_PASS DISK FILESYSTEM SWAP \
            TIMEZONE LOCALE KEYBOARD MIRRORS DESKTOP; do
     [[ -n "${!VAR:-}" ]] || check_err "$VAR is empty"
 done
@@ -105,11 +107,18 @@ done
 [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || check_err "invalid USER_NAME '$USER_NAME'"
 
 # ─── Booleans ─────────────────────────────────────────────────────────────────
-for VAR in DARK_THEME EXTRA_THEMES BLUETOOTH PRINTING NIGHT_LIGHT \
+for VAR in LUKS LVM DARK_THEME EXTRA_THEMES BLUETOOTH PRINTING NIGHT_LIGHT \
            INSTALL_CPU_UCODE INSTALL_GPU_DRIVERS VIRTUALBOX_GUEST_UTILS OS_PROBER AUR; do
     [[ "${!VAR:-}" =~ ^(true|false)$ ]] || \
         check_err "$VAR must be 'true' or 'false' (got '${!VAR:-}')"
 done
+
+# ─── LUKS / LVM ───────────────────────────────────────────────────────────────
+if [[ "$LUKS" == true ]]; then
+    [[ -n "$LUKS_PASS" ]] || check_err "LUKS_PASS is empty but LUKS=true"
+else
+    check_warn "LUKS=false: the disk will not be encrypted"
+fi
 
 # ─── Timezone / locale / keymap ───────────────────────────────────────────────
 [[ -f "/usr/share/zoneinfo/${TIMEZONE}" ]] || check_err "TIMEZONE '$TIMEZONE' not found"
@@ -125,8 +134,10 @@ if [[ "$NIGHT_LIGHT" == true ]]; then
 fi
 
 # ─── Default passwords ────────────────────────────────────────────────────────
-[[ "$USER_PASS" == changeme || "$ROOT_PASS" == changeme || "$LUKS_PASS" == changeme ]] && \
+[[ "$USER_PASS" == changeme || "$ROOT_PASS" == changeme ]] && \
     check_warn "one or more passwords are still 'changeme'"
+[[ "$LUKS" == true && "$LUKS_PASS" == changeme ]] && \
+    check_warn "LUKS_PASS is still 'changeme'"
 
 # ─── Result ───────────────────────────────────────────────────────────────────
 if (( CHECK_ERRORS > 0 )); then
@@ -185,42 +196,58 @@ timedatectl set-ntp true
 # ─── Disk partitioning ────────────────────────────────────────────────────────
 step "[1.2] Partitioning $DISK"
 if [[ "$DISK" == *nvme* || "$DISK" == *mmcblk* || "$DISK" == *loop* ]]; then
-    PART_BOOT="${DISK}p1"; PART_LUKS="${DISK}p2"
+    PART_BOOT="${DISK}p1"; PART_ROOT="${DISK}p2"
 else
-    PART_BOOT="${DISK}1";  PART_LUKS="${DISK}2"
+    PART_BOOT="${DISK}1";  PART_ROOT="${DISK}2"
 fi
 parted -s "$DISK" mklabel gpt
 parted -s "$DISK" mkpart ESP fat32 1MiB 1025MiB
 parted -s "$DISK" set 1 esp on
 parted -s "$DISK" mkpart primary 1025MiB 100%
 
+# ─── Device mapping ───────────────────────────────────────────────────────────
+CRYPT_NAME="cryptroot"
+[[ "$LVM" == true ]] && CRYPT_NAME="cryptlvm"
+
 # ─── LUKS encryption ──────────────────────────────────────────────────────────
-step "[1.3] Setting up LUKS encryption"
-printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --batch-mode "$PART_LUKS"
-printf '%s' "$LUKS_PASS" | cryptsetup open --key-file - "$PART_LUKS" cryptlvm
+if [[ "$LUKS" == true ]]; then
+    step "[1.3] Setting up LUKS encryption"
+    printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --batch-mode "$PART_ROOT"
+    printf '%s' "$LUKS_PASS" | cryptsetup open --key-file - "$PART_ROOT" "$CRYPT_NAME"
+    ROOT_BASE="/dev/mapper/${CRYPT_NAME}"
+else
+    echo "-> luks encryption: disabled by LUKS=false"
+    ROOT_BASE="$PART_ROOT"
+fi
 
 # ─── LVM setup ────────────────────────────────────────────────────────────────
-step "[1.4] Setting up LVM"
-pvcreate /dev/mapper/cryptlvm
-vgcreate vg0 /dev/mapper/cryptlvm
-lvcreate -l 100%FREE -n root vg0
+if [[ "$LVM" == true ]]; then
+    step "[1.4] Setting up LVM"
+    pvcreate "$ROOT_BASE"
+    vgcreate vg0 "$ROOT_BASE"
+    lvcreate -l 100%FREE -n root vg0
+    ROOT_DEVICE="/dev/vg0/root"
+else
+    echo "-> lvm: disabled by LVM=false"
+    ROOT_DEVICE="$ROOT_BASE"
+fi
 
 # ─── Filesystems ──────────────────────────────────────────────────────────────
 step "[1.5] Formatting filesystems"
 mkfs.fat -F32 "$PART_BOOT"
 case "$FILESYSTEM" in
-    ext4)  mkfs.ext4 -F /dev/vg0/root ;;
-    btrfs) mkfs.btrfs -f /dev/vg0/root ;;
+    ext4)  mkfs.ext4 -F "$ROOT_DEVICE" ;;
+    btrfs) mkfs.btrfs -f "$ROOT_DEVICE" ;;
 esac
 
 # ─── Mounting ─────────────────────────────────────────────────────────────────
 step "[1.6] Mounting filesystems"
 case "$FILESYSTEM" in
     ext4)
-        mount /dev/vg0/root /mnt
+        mount "$ROOT_DEVICE" /mnt
         ;;
     btrfs)
-        mount /dev/vg0/root /mnt
+        mount "$ROOT_DEVICE" /mnt
         btrfs subvolume create /mnt/@
         btrfs subvolume create /mnt/@home
         btrfs subvolume create /mnt/@pkg
@@ -228,12 +255,12 @@ case "$FILESYSTEM" in
         btrfs subvolume create /mnt/@swap
         umount /mnt
         BTRFS_OPTS="noatime,compress=zstd"
-        mount -o "${BTRFS_OPTS},subvol=@" /dev/vg0/root /mnt
+        mount -o "${BTRFS_OPTS},subvol=@" "$ROOT_DEVICE" /mnt
         mkdir -p /mnt/home /mnt/var/cache/pacman/pkg /mnt/var/log /mnt/swap
-        mount -o "${BTRFS_OPTS},subvol=@home" /dev/vg0/root /mnt/home
-        mount -o "${BTRFS_OPTS},subvol=@pkg"  /dev/vg0/root /mnt/var/cache/pacman/pkg
-        mount -o "${BTRFS_OPTS},subvol=@log"  /dev/vg0/root /mnt/var/log
-        mount -o "noatime,subvol=@swap"       /dev/vg0/root /mnt/swap
+        mount -o "${BTRFS_OPTS},subvol=@home" "$ROOT_DEVICE" /mnt/home
+        mount -o "${BTRFS_OPTS},subvol=@pkg"  "$ROOT_DEVICE" /mnt/var/cache/pacman/pkg
+        mount -o "${BTRFS_OPTS},subvol=@log"  "$ROOT_DEVICE" /mnt/var/log
+        mount -o "noatime,subvol=@swap"       "$ROOT_DEVICE" /mnt/swap
         chattr +C /mnt/swap
         ;;
 esac
@@ -268,10 +295,15 @@ FS_PACKAGES=()
 [[ "$FILESYSTEM" == btrfs ]] && FS_PACKAGES=(btrfs-progs)
 SWAP_PACKAGES=()
 [[ "$SWAP" != false ]] && SWAP_PACKAGES=(zram-generator)
+LUKS_PACKAGES=()
+[[ "$LUKS" == true ]] && LUKS_PACKAGES=(cryptsetup)
+LVM_PACKAGES=()
+[[ "$LVM" == true ]] && LVM_PACKAGES=(lvm2)
 pacstrap -K /mnt \
     base base-devel linux linux-headers linux-firmware dkms \
-    lvm2 grub efibootmgr networkmanager pacman-contrib nano git vim sudo \
-    "${UCODE_PACKAGES[@]}" "${FS_PACKAGES[@]}" "${SWAP_PACKAGES[@]}" cronie lm_sensors
+    grub efibootmgr networkmanager pacman-contrib nano git vim sudo \
+    "${UCODE_PACKAGES[@]}" "${FS_PACKAGES[@]}" "${SWAP_PACKAGES[@]}" \
+    "${LUKS_PACKAGES[@]}" "${LVM_PACKAGES[@]}" cronie lm_sensors
 
 # ─── Pacman configuration ─────────────────────────────────────────────────────
 step "[2.3] Configuring pacman"
@@ -365,8 +397,12 @@ printf '%s\n' \
 
 # ─── mkinitcpio ───────────────────────────────────────────────────────────────
 step "[3.4] Configuring mkinitcpio hooks"
+MKINITCPIO_HOOKS="base udev autodetect microcode modconf kms keyboard keymap consolefont block"
+[[ "$LUKS" == true ]] && MKINITCPIO_HOOKS="${MKINITCPIO_HOOKS} encrypt"
+[[ "$LVM" == true ]]  && MKINITCPIO_HOOKS="${MKINITCPIO_HOOKS} lvm2"
+MKINITCPIO_HOOKS="${MKINITCPIO_HOOKS} filesystems fsck"
 arch-chroot /mnt sed -i \
-    's/^HOOKS=(.*/HOOKS=(base udev autodetect microcode modconf kms keyboard keymap consolefont block encrypt lvm2 filesystems fsck)/' \
+    "s|^HOOKS=(.*|HOOKS=(${MKINITCPIO_HOOKS})|" \
     /etc/mkinitcpio.conf
 arch-chroot /mnt mkinitcpio -P
 
@@ -377,8 +413,16 @@ sect "4.0" "Configuring Bootloader"
 
 # ─── GRUB ─────────────────────────────────────────────────────────────────────
 step "[4.1] Configuring GRUB"
-LUKS_UUID=$(blkid -s UUID -o value "$PART_LUKS")
-KERNEL_PARAMS="loglevel=3 quiet cryptdevice=UUID=${LUKS_UUID}:cryptlvm:allow-discards root=/dev/vg0/root"
+KERNEL_PARAMS="loglevel=3 quiet"
+if [[ "$LUKS" == true ]]; then
+    LUKS_UUID=$(blkid -s UUID -o value "$PART_ROOT")
+    KERNEL_PARAMS="${KERNEL_PARAMS} cryptdevice=UUID=${LUKS_UUID}:${CRYPT_NAME}:allow-discards"
+fi
+if [[ "$LUKS" == false && "$LVM" == false ]]; then
+    KERNEL_PARAMS="${KERNEL_PARAMS} root=UUID=$(blkid -s UUID -o value "$ROOT_DEVICE")"
+else
+    KERNEL_PARAMS="${KERNEL_PARAMS} root=${ROOT_DEVICE}"
+fi
 [[ "$SWAP" != false ]]       && KERNEL_PARAMS="${KERNEL_PARAMS} zswap.enabled=0"
 [[ "$FILESYSTEM" == btrfs ]] && KERNEL_PARAMS="${KERNEL_PARAMS} rootflags=subvol=@"
 arch-chroot /mnt sed -i \
