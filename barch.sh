@@ -20,36 +20,48 @@ step() { echo -e "${DPURPLE}=> $*${NC}"; }
 sect() { echo -e "\n${LPURPLE}═══════ [$*] ═══════${NC}"; }
 
 # ─── Installation Variables ───────────────────────────────────────────────────
+
+# disk
+DISK="/dev/sda"
+LUKS=true
+LUKS_PASS="changeme"
+LVM=true
+FILESYSTEM="ext4"
+SWAP="auto"
+
+# system
 HOST_NAME="computer"
 USER_NAME="user"
 USER_PASS="changeme"
 ROOT_PASS="changeme"
-DISK="/dev/sda"
-FILESYSTEM="ext4"
-LUKS=true
-LUKS_PASS="changeme"
-LVM=true
-SWAP="auto"
 TIMEZONE="Europe/Rome"
 LOCALE="en_GB.UTF-8"
 KEYBOARD="us"
 MIRRORS="Sweden"
+OS_PROBER=false
+AUR=true
+
+# hardware
+INSTALL_CPU_UCODE=true
+INSTALL_GPU_DRIVERS=true
+VIRTUALBOX_GUEST_UTILS=false
+QEMU_GUEST_UTILS=false
+
+# desktop
 DESKTOP="xfce"
+THEME="black"
+ICONS_PAPIRUS=true
+WALLHAVEN="j86lwq"
 PACKAGES_REMOVE=(parole xfburn xfce4-screenshooter)
 PACKAGES_INSTALL=(mpv flameshot)
-DARK_THEME=false
-EXTRA_THEMES=false
-WALLHAVEN="none"
+
+# services
 BLUETOOTH=true
 PRINTING=true
 NIGHT_LIGHT=true
 NIGHT_LIGHT_LATITUDE="41.9"
 NIGHT_LIGHT_LONGITUDE="12.5"
-INSTALL_CPU_UCODE=true
-INSTALL_GPU_DRIVERS=true
-VIRTUALBOX_GUEST_UTILS=false
-OS_PROBER=false
-AUR=true
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # S T A R T
@@ -78,7 +90,7 @@ curl -fsS --max-time 3 https://archlinux.org >/dev/null || check_warn "no intern
 
 # ─── Required variables ───────────────────────────────────────────────────────
 for VAR in HOST_NAME USER_NAME USER_PASS ROOT_PASS DISK FILESYSTEM SWAP \
-           TIMEZONE LOCALE KEYBOARD MIRRORS DESKTOP; do
+           TIMEZONE LOCALE KEYBOARD MIRRORS DESKTOP THEME; do
     [[ -n "${!VAR:-}" ]] || check_err "$VAR is empty"
 done
 
@@ -97,6 +109,12 @@ done
 [[ "$DESKTOP" =~ ^(xfce|kde|gnome|cinnamon|mate|lxqt|none)$ ]] || \
     check_err "unknown DESKTOP '$DESKTOP' (xfce|kde|gnome|cinnamon|mate|lxqt|none)"
 
+# ─── Theme ────────────────────────────────────────────────────────────────────
+[[ "$THEME" =~ ^(default|dark|black)$ ]] || \
+    check_err "THEME must be 'default', 'dark' or 'black' (got '$THEME')"
+[[ "$DESKTOP" == "none" && ( "$THEME" != "default" || "$ICONS_PAPIRUS" == true ) ]] && \
+    check_warn "theme/icons requested but DESKTOP=none: they will not be applied"
+
 # ─── Wallpaper ────────────────────────────────────────────────────────────────
 [[ "$WALLHAVEN" == "none" || "$WALLHAVEN" =~ ^[a-z0-9]{6}$ ]] || \
     check_err "WALLHAVEN must be 'none' or a 6-character wallhaven code (got '$WALLHAVEN')"
@@ -107,8 +125,9 @@ done
 [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || check_err "invalid USER_NAME '$USER_NAME'"
 
 # ─── Booleans ─────────────────────────────────────────────────────────────────
-for VAR in LUKS LVM DARK_THEME EXTRA_THEMES BLUETOOTH PRINTING NIGHT_LIGHT \
-           INSTALL_CPU_UCODE INSTALL_GPU_DRIVERS VIRTUALBOX_GUEST_UTILS OS_PROBER AUR; do
+for VAR in LUKS LVM ICONS_PAPIRUS BLUETOOTH PRINTING NIGHT_LIGHT \
+           INSTALL_CPU_UCODE INSTALL_GPU_DRIVERS VIRTUALBOX_GUEST_UTILS \
+           QEMU_GUEST_UTILS OS_PROBER AUR; do
     [[ "${!VAR:-}" =~ ^(true|false)$ ]] || \
         check_err "$VAR must be 'true' or 'false' (got '${!VAR:-}')"
 done
@@ -134,10 +153,9 @@ if [[ "$NIGHT_LIGHT" == true ]]; then
 fi
 
 # ─── Default passwords ────────────────────────────────────────────────────────
-[[ "$USER_PASS" == changeme || "$ROOT_PASS" == changeme ]] && \
+[[ "$USER_PASS" == changeme || "$ROOT_PASS" == changeme || \
+   ( "$LUKS" == true && "$LUKS_PASS" == changeme ) ]] && \
     check_warn "one or more passwords are still 'changeme'"
-[[ "$LUKS" == true && "$LUKS_PASS" == changeme ]] && \
-    check_warn "LUKS_PASS is still 'changeme'"
 
 # ─── Result ───────────────────────────────────────────────────────────────────
 if (( CHECK_ERRORS > 0 )); then
@@ -193,8 +211,17 @@ sect "1.0" "Formatting Disk"
 step "[1.1] Syncing system clock"
 timedatectl set-ntp true
 
+# ─── Leftover cleanup ─────────────────────────────────────────────────────────
+step "[1.2] Cleaning up previous installations"
+umount -R /mnt 2>/dev/null || true
+swapoff -a 2>/dev/null || true
+vgchange -an 2>/dev/null || true
+cryptsetup close cryptlvm 2>/dev/null || true
+cryptsetup close cryptroot 2>/dev/null || true
+wipefs -af "$DISK"
+
 # ─── Disk partitioning ────────────────────────────────────────────────────────
-step "[1.2] Partitioning $DISK"
+step "[1.3] Partitioning $DISK"
 if [[ "$DISK" == *nvme* || "$DISK" == *mmcblk* || "$DISK" == *loop* ]]; then
     PART_BOOT="${DISK}p1"; PART_ROOT="${DISK}p2"
 else
@@ -204,6 +231,8 @@ parted -s "$DISK" mklabel gpt
 parted -s "$DISK" mkpart ESP fat32 1MiB 1025MiB
 parted -s "$DISK" set 1 esp on
 parted -s "$DISK" mkpart primary 1025MiB 100%
+udevadm settle
+wipefs -af "$PART_BOOT" "$PART_ROOT"
 
 # ─── Device mapping ───────────────────────────────────────────────────────────
 CRYPT_NAME="cryptroot"
@@ -211,8 +240,8 @@ CRYPT_NAME="cryptroot"
 
 # ─── LUKS encryption ──────────────────────────────────────────────────────────
 if [[ "$LUKS" == true ]]; then
-    step "[1.3] Setting up LUKS encryption"
-    printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --batch-mode "$PART_ROOT"
+    step "[1.4] Setting up LUKS encryption"
+    printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --batch-mode --key-file - "$PART_ROOT"
     printf '%s' "$LUKS_PASS" | cryptsetup open --key-file - "$PART_ROOT" "$CRYPT_NAME"
     ROOT_BASE="/dev/mapper/${CRYPT_NAME}"
 else
@@ -222,7 +251,7 @@ fi
 
 # ─── LVM setup ────────────────────────────────────────────────────────────────
 if [[ "$LVM" == true ]]; then
-    step "[1.4] Setting up LVM"
+    step "[1.5] Setting up LVM"
     pvcreate "$ROOT_BASE"
     vgcreate vg0 "$ROOT_BASE"
     lvcreate -l 100%FREE -n root vg0
@@ -233,7 +262,7 @@ else
 fi
 
 # ─── Filesystems ──────────────────────────────────────────────────────────────
-step "[1.5] Formatting filesystems"
+step "[1.6] Formatting filesystems"
 mkfs.fat -F32 "$PART_BOOT"
 case "$FILESYSTEM" in
     ext4)  mkfs.ext4 -F "$ROOT_DEVICE" ;;
@@ -241,7 +270,7 @@ case "$FILESYSTEM" in
 esac
 
 # ─── Mounting ─────────────────────────────────────────────────────────────────
-step "[1.6] Mounting filesystems"
+step "[1.7] Mounting filesystems"
 case "$FILESYSTEM" in
     ext4)
         mount "$ROOT_DEVICE" /mnt
@@ -278,7 +307,7 @@ reflector \
     --country "$MIRRORS" \
     --age 12 \
     --protocol https \
-    --latest 10 \
+    --latest 20 \
     --sort rate \
     --connection-timeout 5 \
     --download-timeout 5 \
@@ -474,9 +503,11 @@ case "$DESKTOP" in
     kde)
         DE_PACKAGES=(
             plasma-desktop kdeplasma-addons
+            breeze
             plasma-nm plasma-pa kscreen powerdevil
             dolphin konsole kate ark gwenview okular spectacle
             sddm sddm-kcm layer-shell-qt
+            xdg-desktop-portal-kde
         )
         DE_DM="sddm"
         SESSION_PACKAGES=(xorg-xwayland)
@@ -753,7 +784,6 @@ EOF
         xfce)
             XFDESKTOP="/mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml"
             if [[ -f "$XFDESKTOP" ]]; then
-                # patch in place: xfdesktop ships last-image defaults for every monitor
                 sed -i "s|\(name=\"last-image\" type=\"string\" value=\"\)[^\"]*|\1${WALL_DEST}|g" "$XFDESKTOP"
             else
                 mkdir -p "$(dirname "$XFDESKTOP")"
@@ -777,20 +807,8 @@ EOF
             ;;
         # ─── KDE Plasma ─────────────────────────────────────────────────────
         kde)
-            # plasma reads system-wide defaults via KConfig cascade
-            cat <<EOF > /mnt/etc/xdg/plasma-org.kde.plasma.desktop-appletsrc
-[Containments][1]
-activityId=
-formfactor=0
-immutability=1
-lastScreen=0
-location=0
-plugin=org.kde.plasma.folder
-wallpaperplugin=org.kde.image
-
-[Containments][1][Wallpaper][org.kde.image][General]
-Image=file://${WALL_DEST}
-EOF
+            sed -i '/<entry name="Image"/,/<\/entry>/ s|<default>[^<]*</default>|<default>file://'"${WALL_DEST}"'</default>|' \
+                "/mnt/usr/share/plasma/wallpapers/org.kde.image/contents/config/main.xml"
             ;;
         # ─── GNOME ──────────────────────────────────────────────────────────
         gnome)
@@ -834,19 +852,95 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════════
 # [8.0] THEMING
 # ═══════════════════════════════════════════════════════════════════════════════
-if [[ "$DESKTOP" != "none" && "$DARK_THEME" == true ]]; then
+DARK_VARIANT=false
+[[ "$THEME" == "dark" || "$THEME" == "black" ]] && DARK_VARIANT=true
+
+if [[ "$DESKTOP" != "none" && ( "$DARK_VARIANT" == true || "$ICONS_PAPIRUS" == true ) ]]; then
     sect "8.0" "Applying Themes"
 
-    # ─── Papirus icons ────────────────────────────────────────────────────────
-    step "[8.1] Installing Papirus icon theme"
-    THEME_PACKAGES=(papirus-icon-theme gnome-themes-extra)
-    [[ "$EXTRA_THEMES" == true ]] && THEME_PACKAGES+=(qt5ct qt6ct)
-    arch-chroot /mnt pacman -S --noconfirm "${THEME_PACKAGES[@]}"
-    ICON_THEME="Papirus-Dark"
+    # ─── Theme packages ───────────────────────────────────────────────────────
+    step "[8.1] Installing theme packages"
+    THEME_PACKAGES=()
+    [[ "$ICONS_PAPIRUS" == true ]] && THEME_PACKAGES+=(papirus-icon-theme)
+    if [[ "$DESKTOP" == "kde" ]]; then
+        # GTK apps under Plasma follow Breeze-Dark (both for dark and black)
+        [[ "$DARK_VARIANT" == true ]] && THEME_PACKAGES+=(breeze-gtk)
+    elif [[ "$THEME" == "dark" ]]; then
+        THEME_PACKAGES+=(gnome-themes-extra)                       # Adwaita-dark (GTK3)
+        [[ "$DESKTOP" == "mate" ]] && THEME_PACKAGES+=(mate-themes) # BlackMATE
+    elif [[ "$THEME" == "black" ]]; then
+        [[ "$DESKTOP" != "lxqt" ]] && THEME_PACKAGES+=(qt5ct qt6ct)
+    fi
+    (( ${#THEME_PACKAGES[@]} > 0 )) && \
+        arch-chroot /mnt pacman -S --noconfirm "${THEME_PACKAGES[@]}"
 
-    # ─── Adwaita AMOLED theme ─────────────────────────────────────────────────
-    if [[ "$EXTRA_THEMES" == true ]]; then
-        step "[8.2] Installing Adwaita-AMOLED theme"
+    # ─── Icon theme name ──────────────────────────────────────────────────────
+    ICON_THEME=""
+    if [[ "$ICONS_PAPIRUS" == true ]]; then
+        ICON_THEME="Papirus"
+        [[ "$DARK_VARIANT" == true ]] && ICON_THEME="Papirus-Dark"
+    fi
+
+    # ─── Breeze-Dark-OLED theme (KDE, black only) ─────────────────────────────
+    if [[ "$THEME" == "black" && "$DESKTOP" == "kde" ]]; then
+        step "[8.2] Installing Breeze-Dark-OLED theme"
+        OLED_TMP=$(mktemp -d)
+        curl -fsSL "https://raw.githubusercontent.com/RazerPC/Breeze-Dark-OLED/main/Breeze-Dark-OLED.colors" \
+            -o "$OLED_TMP/Breeze-Dark-OLED.colors"
+        curl -fsSL "https://raw.githubusercontent.com/RazerPC/Breeze-Dark-OLED/main/Breeze-Dark-OLED-Plasma.tar.gz" \
+            -o "$OLED_TMP/Breeze-Dark-OLED-Plasma.tar.gz"
+        mkdir -p /mnt/usr/share/color-schemes /mnt/usr/share/plasma/desktoptheme
+        cp "$OLED_TMP/Breeze-Dark-OLED.colors" /mnt/usr/share/color-schemes/
+        tar -xzf "$OLED_TMP/Breeze-Dark-OLED-Plasma.tar.gz" \
+            -C /mnt/usr/share/plasma/desktoptheme/
+        # the theme targets Plasma 5: bump the API version so Plasma 6 loads it
+        OLED_META="/mnt/usr/share/plasma/desktoptheme/Breeze-Dark-OLED-Plasma/metadata.json"
+        [[ -f "$OLED_META" ]] && \
+            sed -i -E 's/"X-Plasma-API": *"5\.0"/"X-Plasma-API": "6.0"/' "$OLED_META"
+        rm -rf "$OLED_TMP"
+
+        # look-and-feel package: this is what Plasma applies on first login
+        LNF_DIR="/mnt/usr/share/plasma/look-and-feel/org.kde.breezedark-oled.desktop"
+        mkdir -p "${LNF_DIR}/contents/defaults"
+        cat <<'EOF' > "${LNF_DIR}/metadata.json"
+{
+    "KPackageStructure": "Plasma/LookAndFeel",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "barch"
+            }
+        ],
+        "Description": "Breeze Dark with pure black OLED backgrounds",
+       "EnabledByDefault": true,
+        "Id": "org.kde.breezedark-oled.desktop",
+        "License": "LGPL-2.0-or-later",
+        "Name": "Breeze Dark OLED",
+        "Version": "1.0",
+        "Website": "https://kde.org"
+    },
+    "X-Plasma-API": "5.0"
+}
+EOF
+        cat <<EOF > "${LNF_DIR}/contents/defaults/kdeglobals"
+[General]
+ColorScheme=Breeze-Dark-OLED
+
+[KDE]
+widgetStyle=Breeze
+
+[Icons]
+Theme=${ICON_THEME:-breeze}
+EOF
+        cat <<'EOF' > "${LNF_DIR}/contents/defaults/plasmarc"
+[Theme]
+name=Breeze-Dark-OLED-Plasma
+EOF
+    fi
+
+    # ─── Adwaita-AMOLED theme (GTK desktops, black only) ──────────────────────
+    if [[ "$THEME" == "black" && "$DESKTOP" != "kde" ]]; then
+        step "[8.3] Installing Adwaita-AMOLED theme"
         AMOLED_DIR="/usr/share/themes/Adwaita-AMOLED"
         mkdir -p "/mnt${AMOLED_DIR}"
         curl -fsSL "https://codeload.github.com/librerob/Adwaita-AMOLED/tar.gz/HEAD" \
@@ -869,14 +963,16 @@ if [[ "$DESKTOP" != "none" && "$DARK_THEME" == true ]]; then
         done
         arch-chroot /mnt chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.config"
 
-        # Qt theming via qt5ct (KDE and LXQt use their own platform theme)
-        if [[ "$DESKTOP" != "kde" && "$DESKTOP" != "lxqt" ]]; then
+        if [[ "$DESKTOP" != "lxqt" ]]; then
             printf '%s\n' "QT_QPA_PLATFORMTHEME=qt5ct" >> /mnt/etc/environment
         fi
+    fi
 
-        GTK_THEME_NAME="Adwaita-AMOLED"
-    else
+    # ─── GTK theme name ───────────────────────────────────────────────────────
+    GTK_THEME_NAME=""
+    if [[ "$DARK_VARIANT" == true ]]; then
         GTK_THEME_NAME="Adwaita-dark"
+        [[ "$THEME" == "black" ]] && GTK_THEME_NAME="Adwaita-AMOLED"
     fi
 
     # ─── dconf system defaults ────────────────────────────────────────────────
@@ -894,16 +990,17 @@ EOF
     esac
 
     # ─── Desktop theme ────────────────────────────────────────────────────────
-    step "[8.3] Applying dark theme"
+    step "[8.4] Applying theme to $DESKTOP"
     case "$DESKTOP" in
         # ─── XFCE ───────────────────────────────────────────────────────────
         xfce)
             XSETTINGS="/mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml"
             if [[ -f "$XSETTINGS" ]]; then
-                # patch in place: preserves xfce4-settings defaults (Gtk/MenuImages, Xft, fonts...)
-                sed -i \
-                    -e "s|\(name=\"ThemeName\" type=\"string\" value=\"\)[^\"]*|\1${GTK_THEME_NAME}|" \
-                    -e "s|\(name=\"IconThemeName\" type=\"string\" value=\"\)[^\"]*|\1${ICON_THEME}|" \
+                [[ -n "$GTK_THEME_NAME" ]] && sed -i \
+                    "s|\(name=\"ThemeName\" type=\"string\" value=\"\)[^\"]*|\1${GTK_THEME_NAME}|" \
+                    "$XSETTINGS"
+                [[ -n "$ICON_THEME" ]] && sed -i \
+                    "s|\(name=\"IconThemeName\" type=\"string\" value=\"\)[^\"]*|\1${ICON_THEME}|" \
                     "$XSETTINGS"
             else
                 mkdir -p "$(dirname "$XSETTINGS")"
@@ -911,8 +1008,8 @@ EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xsettings" version="1.0">
   <property name="Net" type="empty">
-    <property name="ThemeName" type="string" value="${GTK_THEME_NAME}"/>
-    <property name="IconThemeName" type="string" value="${ICON_THEME}"/>
+    <property name="ThemeName" type="string" value="${GTK_THEME_NAME:-Adwaita}"/>
+    <property name="IconThemeName" type="string" value="${ICON_THEME:-Adwaita}"/>
   </property>
   <property name="Gtk" type="empty">
     <property name="MenuImages" type="bool" value="true"/>
@@ -923,88 +1020,135 @@ EOF
 </channel>
 EOF
             fi
-            cat <<'EOF' > /mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfwm4" version="1.0">
-  <property name="general" type="empty">
-    <property name="theme" type="string" value="Default"/>
-  </property>
-</channel>
-EOF
             ;;
-        # ─── KDE Plasma ─────────────────────────────────────────────────────
+                # ─── KDE Plasma ─────────────────────────────────────────────────────
         kde)
-            cat <<EOF > /mnt/etc/xdg/kdeglobals
-[General]
-ColorScheme=BreezeDark
+            case "$THEME" in
+                black)
+                    KDE_COLORS="Breeze-Dark-OLED"              # /usr/share/color-schemes/Breeze-Dark-OLED.colors
+                    KDE_PLASMA_THEME="Breeze-Dark-OLED-Plasma" # /usr/share/plasma/desktoptheme/Breeze-Dark-OLED-Plasma
+                    KDE_LNF="org.kde.breezedark-oled.desktop"  # created in step 8.2
+                    ;;
+                dark)
+                    KDE_COLORS="BreezeDark"                    # /usr/share/color-schemes/BreezeDark.colors
+                    KDE_PLASMA_THEME="breeze-dark"             # /usr/share/plasma/desktoptheme/breeze-dark
+                    KDE_LNF="org.kde.breezedark.desktop"       # shipped by the breeze package
+                    ;;
+                *)
+                    KDE_COLORS=""
+                    KDE_PLASMA_THEME=""
+                    KDE_LNF="org.kde.breeze.desktop"
+                    ;;
+            esac
 
-[Icons]
-Theme=${ICON_THEME}
-EOF
-            mkdir -p /mnt/etc/gtk-3.0
-            cat <<EOF > /mnt/etc/gtk-3.0/settings.ini
+            [[ -d "/mnt/usr/share/plasma/look-and-feel/${KDE_LNF}" ]] || \
+                echo -e "${YELLOW}[WARN]${NC} look-and-feel '${KDE_LNF}' not found"
+
+            # On first login Plasma applies the look-and-feel package named by
+            # LookAndFeelPackage; an invalid or missing name falls back to the
+            # default light breeze package, overriding other system defaults.
+            {
+                echo "[KDE]"
+                echo "LookAndFeelPackage=${KDE_LNF}"
+                if [[ "$DARK_VARIANT" == true ]]; then
+                    echo "widgetStyle=Breeze"
+                    echo ""
+                    echo "[General]"
+                    echo "ColorScheme=${KDE_COLORS}"
+                fi
+                if [[ -n "$ICON_THEME" ]]; then
+                    echo ""
+                    echo "[Icons]"
+                    echo "Theme=${ICON_THEME}"
+                fi
+            } > /mnt/etc/xdg/kdeglobals
+
+            if [[ "$DARK_VARIANT" == true ]]; then
+                # plasmarc: plasma shell theme (panels, widgets, popups)
+                printf '[Theme]\nname=%s\n' "$KDE_PLASMA_THEME" > /mnt/etc/xdg/plasmarc
+
+                # GTK apps under Plasma
+                mkdir -p /mnt/etc/gtk-3.0
+                cat <<EOF > /mnt/etc/gtk-3.0/settings.ini
 [Settings]
-gtk-theme-name=${GTK_THEME_NAME}
-gtk-icon-theme-name=${ICON_THEME}
+gtk-theme-name=Breeze-Dark
+gtk-icon-theme-name=${ICON_THEME:-breeze}
 gtk-application-prefer-dark-theme=true
 EOF
+            fi
+
+            # seed the user config too: guarantees the theme even if the
+            # first-login look-and-feel application does not run
+            for HOME_DIR in "/mnt/etc/skel" "/mnt/home/${USER_NAME}"; do
+                mkdir -p "$HOME_DIR/.config"
+                cp /mnt/etc/xdg/kdeglobals "$HOME_DIR/.config/kdeglobals"
+                if [[ "$DARK_VARIANT" == true ]]; then
+                    cp /mnt/etc/xdg/plasmarc "$HOME_DIR/.config/plasmarc"
+                fi
+            done
+            arch-chroot /mnt chown -R "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/.config"
             ;;
         # ─── GNOME ──────────────────────────────────────────────────────────
         gnome)
-            cat <<EOF > /mnt/etc/dconf/db/local.d/00-dark-theme
-[org/gnome/desktop/interface]
-color-scheme='prefer-dark'
-gtk-theme='${GTK_THEME_NAME}'
-icon-theme='${ICON_THEME}'
-EOF
+            {
+                echo "[org/gnome/desktop/interface]"
+                if [[ "$DARK_VARIANT" == true ]]; then
+                    echo "color-scheme='prefer-dark'"
+                    echo "gtk-theme='${GTK_THEME_NAME}'"
+                fi
+                [[ -n "$ICON_THEME" ]] && echo "icon-theme='${ICON_THEME}'"
+            } > /mnt/etc/dconf/db/local.d/00-theme
             ;;
         # ─── Cinnamon ───────────────────────────────────────────────────────
         cinnamon)
-            CINNAMON_SHELL_THEME="cinnamon"
-            [[ "$EXTRA_THEMES" == true ]] && CINNAMON_SHELL_THEME="Adwaita-AMOLED"
-            cat <<EOF > /mnt/etc/dconf/db/local.d/00-dark-theme
-[org/cinnamon/desktop/interface]
-gtk-theme='${GTK_THEME_NAME}'
-icon-theme='${ICON_THEME}'
-
-[org/cinnamon/theme]
-name='${CINNAMON_SHELL_THEME}'
-EOF
+            {
+                echo "[org/cinnamon/desktop/interface]"
+                [[ "$DARK_VARIANT" == true ]] && echo "gtk-theme='${GTK_THEME_NAME}'"
+                [[ -n "$ICON_THEME" ]] && echo "icon-theme='${ICON_THEME}'"
+                if [[ "$DARK_VARIANT" == true ]]; then
+                    CINNAMON_SHELL_THEME="cinnamon"
+                    [[ "$THEME" == "black" ]] && CINNAMON_SHELL_THEME="Adwaita-AMOLED"
+                    echo ""
+                    echo "[org/cinnamon/theme]"
+                    echo "name='${CINNAMON_SHELL_THEME}'"
+                fi
+            } > /mnt/etc/dconf/db/local.d/00-theme
             ;;
         # ─── MATE ───────────────────────────────────────────────────────────
         mate)
-            MATE_GTK_THEME="${GTK_THEME_NAME}"
-            MATE_WM_THEME="Adwaita-AMOLED"
-            MATE_ICON_THEME="${ICON_THEME}"
-            if [[ "$EXTRA_THEMES" != true ]]; then
-                MATE_GTK_THEME="BlackMATE"
-                MATE_WM_THEME="BlackMATE"
-                MATE_ICON_THEME="BlackMATE"
-            fi
-            cat <<EOF > /mnt/etc/dconf/db/local.d/00-dark-theme
-[org/mate/interface]
-gtk-theme='${MATE_GTK_THEME}'
-icon-theme='${MATE_ICON_THEME}'
-
-[org/mate/marco/general]
-theme='${MATE_WM_THEME}'
-EOF
+            {
+                echo "[org/mate/interface]"
+                if [[ "$DARK_VARIANT" == true ]]; then
+                    MATE_GTK_THEME="BlackMATE"
+                    [[ "$THEME" == "black" ]] && MATE_GTK_THEME="Adwaita-AMOLED"
+                    echo "gtk-theme='${MATE_GTK_THEME}'"
+                fi
+                [[ -n "$ICON_THEME" ]] && echo "icon-theme='${ICON_THEME}'"
+                if [[ "$DARK_VARIANT" == true ]]; then
+                    echo ""
+                    echo "[org/mate/marco/general]"
+                    echo "theme='${MATE_GTK_THEME}'"
+                fi
+            } > /mnt/etc/dconf/db/local.d/00-theme
             ;;
         # ─── LXQt ───────────────────────────────────────────────────────────
         lxqt)
-            mkdir -p /mnt/etc/xdg/lxqt /mnt/etc/gtk-3.0
-            cat <<EOF > /mnt/etc/xdg/lxqt/lxqt.conf
-[General]
-theme=dark
-icon_theme=${ICON_THEME}
-EOF
-            cat <<EOF > /mnt/etc/gtk-3.0/settings.ini
+            mkdir -p /mnt/etc/xdg/lxqt
+            {
+                echo "[General]"
+                [[ "$DARK_VARIANT" == true ]] && echo "theme=dark"
+                echo "icon_theme=${ICON_THEME:-breeze}"
+            } > /mnt/etc/xdg/lxqt/lxqt.conf
+            if [[ "$DARK_VARIANT" == true ]]; then
+                mkdir -p /mnt/etc/gtk-3.0
+                cat <<EOF > /mnt/etc/gtk-3.0/settings.ini
 [Settings]
 gtk-theme-name=${GTK_THEME_NAME}
-gtk-icon-theme-name=${ICON_THEME}
+gtk-icon-theme-name=${ICON_THEME:-breeze}
 gtk-application-prefer-dark-theme=true
 EOF
-            if [[ "$EXTRA_THEMES" == true ]]; then
+            fi
+            if [[ "$THEME" == "black" ]]; then
                 mkdir -p /mnt/etc/xdg/openbox
                 cat <<'EOF' > /mnt/etc/xdg/openbox/lxqt-rc.xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1024,44 +1168,63 @@ EOF
     [[ "$DCONF_USED" == true ]] && arch-chroot /mnt dconf update
 
     # ─── Display manager theme ────────────────────────────────────────────────
-    step "[8.4] Applying theme to $DE_DM"
-    case "$DE_DM" in
-        lightdm)
-            mkdir -p /mnt/etc/lightdm
-            LIGHTDM_BG=""
-            [[ "$EXTRA_THEMES" == true ]] && \
-                LIGHTDM_BG=$'background=#000000\n'
-            cat <<EOF > /mnt/etc/lightdm/lightdm-gtk-greeter.conf
+    if [[ "$DARK_VARIANT" == true && -n "$DE_DM" ]]; then
+        step "[8.5] Applying theme to $DE_DM"
+        case "$DE_DM" in
+            lightdm)
+                mkdir -p /mnt/etc/lightdm
+                LIGHTDM_BG=""
+                [[ "$THEME" == "black" ]] && \
+                    LIGHTDM_BG=$'background=#000000\n'
+                cat <<EOF > /mnt/etc/lightdm/lightdm-gtk-greeter.conf
 [greeter]
 theme-name=${GTK_THEME_NAME}
-icon-theme-name=${ICON_THEME}
+icon-theme-name=${ICON_THEME:-Adwaita}
 ${LIGHTDM_BG}indicators=~host;~spacer;~clock;~spacer;~session;~a11y;~power
 EOF
-            ;;
-        sddm)
-            if [[ "$EXTRA_THEMES" == true ]]; then
-                mkdir -p "/mnt/usr/share/sddm/themes/breeze"
+                ;;
+            sddm)
+                SDDM_BACKGROUND="#232629"
+                [[ "$THEME" == "black" ]] && SDDM_BACKGROUND="#000000"
+                mkdir -p /mnt/etc/sddm.conf.d /mnt/usr/share/sddm/themes/breeze
+                cat <<'EOF' > /mnt/etc/sddm.conf.d/20-theme.conf
+[Theme]
+Current=breeze
+EOF
                 cat <<EOF > /mnt/usr/share/sddm/themes/breeze/theme.conf.user
 [General]
-background=/usr/share/themes/Adwaita-AMOLED/extra/wallpaper/blackmount.png
-type=image
+type=color
+color=${SDDM_BACKGROUND}
+background=
+showClock=true
+showlogo=false
 EOF
-            fi
-            ;;
-    esac
+                ;;
+        esac
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# [9.0] VIRTUALBOX GUEST UTILS
+# [9.0] VM UTILS
 # ═══════════════════════════════════════════════════════════════════════════════
-if [[ "$VIRTUALBOX_GUEST_UTILS" == true ]]; then
-    sect "9.0" "VirtualBox Guest Utils"
+if [[ "$VIRTUALBOX_GUEST_UTILS" == true || "$QEMU_GUEST_UTILS" == true ]]; then
+    sect "9.0" "VM Utils"
 
-    # ─── Guest utils ──────────────────────────────────────────────────────────
-    step "[9.1] Installing VirtualBox Guest Utils"
-    arch-chroot /mnt pacman -S --noconfirm virtualbox-guest-utils
-    arch-chroot /mnt systemctl enable vboxservice.service
-    arch-chroot /mnt usermod -aG vboxsf "${USER_NAME}"
+    # ─── VirtualBox ───────────────────────────────────────────────────────────
+    if [[ "$VIRTUALBOX_GUEST_UTILS" == true ]]; then
+        step "[9.1] Installing VirtualBox Guest Utils"
+        arch-chroot /mnt pacman -S --noconfirm virtualbox-guest-utils
+        arch-chroot /mnt systemctl enable vboxservice.service
+        arch-chroot /mnt usermod -aG vboxsf "${USER_NAME}"
+    fi
+
+    # ─── QEMU/KVM ─────────────────────────────────────────────────────────────
+    if [[ "$QEMU_GUEST_UTILS" == true ]]; then
+        step "[9.2] Installing QEMU/KVM Guest Utils"
+        arch-chroot /mnt pacman -S --noconfirm qemu-guest-agent spice-vdagent
+        arch-chroot /mnt systemctl enable qemu-guest-agent.service
+        arch-chroot /mnt systemctl enable spice-vdagentd.service
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
