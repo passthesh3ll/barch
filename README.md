@@ -45,15 +45,22 @@ All configuration is done via the variables at the top of the script.
 | Variable | Default | Values | Description |
 |---|---|---|---|
 | `DESKTOP` | `xfce` | `xfce`, `kde`, `gnome`, `cinnamon`, `mate`, `lxqt`, `none` | Desktop environment to install. `none` = headless install, no GUI and no display manager. |
+| `WALLHAVEN` | `none` | `none` or a 6-character Wallhaven code, e.g. `p22989` | Download the wallpaper from Wallhaven and apply it as the desktop background. Ignored when `DESKTOP=none`. The code is the ID from a Wallhaven URL like `https://wallhaven.cc/w/p22989`. |
 | `PACKAGES_REMOVE` | `(parole xfburn xfce4-screenshooter)` | space-separated package names, `()` = none | Packages removed after installation. Applied only with `DESKTOP=xfce`. |
 | `PACKAGES_INSTALL` | `(mpv flameshot)` | space-separated package names, `()` = none | Extra packages installed after the desktop. Ignored with `DESKTOP=none`. |
-| `DARK_THEME` | `true` | `true`, `false` | Apply a dark theme to the desktop and the display manager. |
+| `DARK_THEME` | `false` | `true`, `false` | Apply a dark theme to the desktop and the display manager. |
 | `EXTRA_THEMES` | `false` | `true`, `false` | Use the Adwaita-AMOLED theme instead of the stock dark themes. Requires `DARK_THEME=true`. |
 | `BLUETOOTH` | `true` | `true`, `false` | Install and enable the Bluetooth stack (with blueman or bluedevil on desktop). |
 | `PRINTING` | `true` | `true`, `false` | Install and enable CUPS printing. Ignored with `DESKTOP=none`. |
 | `NIGHT_LIGHT` | `true` | `true`, `false` | Enable night light at the coordinates below. Native on KDE/GNOME/Cinnamon, redshift on XFCE/MATE/LXQt. Ignored with `DESKTOP=none`. |
 | `NIGHT_LIGHT_LATITUDE` | `41.9` | decimal degrees, e.g. `45.46` | Latitude for night light. |
 | `NIGHT_LIGHT_LONGITUDE` | `12.5` | decimal degrees, e.g. `9.19` | Longitude for night light. |
+
+> **Wallpaper:** if `WALLHAVEN` is not `none`, barch downloads the image from
+> Wallhaven using the provided code, saves it in the correct directory for the
+> chosen desktop environment and sets it as the default background. This works
+> with `xfce`, `kde`, `gnome`, `cinnamon`, `mate` and `lxqt`; it is skipped when
+> `DESKTOP=none`. If the code cannot be found, the installation aborts.
 
 ### Hardware and extras
 

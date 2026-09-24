@@ -35,8 +35,9 @@ MIRRORS="Sweden"
 DESKTOP="xfce"
 PACKAGES_REMOVE=(parole xfburn xfce4-screenshooter)
 PACKAGES_INSTALL=(mpv flameshot)
-DARK_THEME=true
+DARK_THEME=false
 EXTRA_THEMES=false
+WALLHAVEN="none"
 BLUETOOTH=true
 PRINTING=true
 NIGHT_LIGHT=true
@@ -51,13 +52,13 @@ AUR=true
 # ═══════════════════════════════════════════════════════════════════════════════
 # S T A R T
 # ═══════════════════════════════════════════════════════════════════════════════
+BR="${LPURPLE}BARCH${DPURPLE}"
 echo
 echo -e "${DPURPLE}        ╭─────────╮       ${NC}"
-echo -e "${DPURPLE}        │  BARCH  │       ${NC}"
+echo -e "${DPURPLE}        │  ${BR}  │       ${NC}"
 echo -e "${DPURPLE}        ╰─────────╯       ${NC}"
 echo -e "${DPURPLE}       a basic arch       ${NC}"
-echo -e "${DPURPLE}     installer in bash    ${NC}"
-
+echo -e "${DPURPLE}     installer in bash    ${NC}\n\n"
 # ═══════════════════════════════════════════════════════════════════════════════
 # [0.0] CONFIGURATION CHECK
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -93,6 +94,12 @@ done
 # ─── Desktop ──────────────────────────────────────────────────────────────────
 [[ "$DESKTOP" =~ ^(xfce|kde|gnome|cinnamon|mate|lxqt|none)$ ]] || \
     check_err "unknown DESKTOP '$DESKTOP' (xfce|kde|gnome|cinnamon|mate|lxqt|none)"
+
+# ─── Wallpaper ────────────────────────────────────────────────────────────────
+[[ "$WALLHAVEN" == "none" || "$WALLHAVEN" =~ ^[a-z0-9]{6}$ ]] || \
+    check_err "WALLHAVEN must be 'none' or a 6-character wallhaven code (got '$WALLHAVEN')"
+[[ "$WALLHAVEN" != "none" && "$DESKTOP" == "none" ]] && \
+    check_warn "WALLHAVEN is set but DESKTOP=none: no wallpaper will be applied"
 
 # ─── Username ─────────────────────────────────────────────────────────────────
 [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || check_err "invalid USER_NAME '$USER_NAME'"
@@ -643,13 +650,151 @@ EOF
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# [7.0] THEMING
+# [7.0] WALLPAPER
+# ═══════════════════════════════════════════════════════════════════════════════
+if [[ "$DESKTOP" != "none" && "$WALLHAVEN" != "none" ]]; then
+    sect "7.0" "Setting Wallpaper"
+
+    # ─── Download ─────────────────────────────────────────────────────────────
+    step "[7.1] Downloading wallpaper '$WALLHAVEN'"
+    WALL_TMP=""
+    WALL_EXT=""
+    for EXT in jpg png; do
+        WALL_TMP="/tmp/wallhaven-${WALLHAVEN}.${EXT}"
+        if curl -fsSL "https://w.wallhaven.cc/full/${WALLHAVEN:0:2}/wallhaven-${WALLHAVEN}.${EXT}" -o "$WALL_TMP"; then
+            WALL_EXT="$EXT"
+            break
+        fi
+        rm -f "$WALL_TMP"
+        WALL_TMP=""
+    done
+    if [[ -z "$WALL_TMP" ]]; then
+        echo -e "${RED}[ERROR]${NC} wallpaper '$WALLHAVEN' not found on wallhaven" >&2
+        exit 1
+    fi
+
+    # ─── Per-DE default wallpaper directory ───────────────────────────────────
+    step "[7.2] Saving wallpaper"
+    case "$DESKTOP" in
+        xfce)     WALL_DIR="/usr/share/backgrounds/xfce" ;;
+        kde)      WALL_DIR="/usr/share/wallpapers" ;;
+        gnome)    WALL_DIR="/usr/share/backgrounds/gnome" ;;
+        cinnamon) WALL_DIR="/usr/share/backgrounds" ;;
+        mate)     WALL_DIR="/usr/share/backgrounds/mate" ;;
+        lxqt)     WALL_DIR="/usr/share/lxqt/wallpapers" ;;
+    esac
+    WALL_DEST="${WALL_DIR}/wallhaven-${WALLHAVEN}.${WALL_EXT}"
+    mkdir -p "/mnt${WALL_DIR}"
+    mv "$WALL_TMP" "/mnt${WALL_DEST}"
+    echo "-> wallpaper saved: $WALL_DEST"
+
+    # ─── dconf system defaults ────────────────────────────────────────────────
+    DCONF_WALL=false
+    case "$DESKTOP" in
+        gnome|cinnamon|mate)
+            DCONF_WALL=true
+            arch-chroot /mnt pacman -S --noconfirm --needed dconf
+            mkdir -p /mnt/etc/dconf/profile /mnt/etc/dconf/db/local.d
+            cat <<'EOF' > /mnt/etc/dconf/profile/user
+user-db:user
+system-db:local
+EOF
+            ;;
+    esac
+
+    # ─── Apply as default background ──────────────────────────────────────────
+    step "[7.3] Applying wallpaper to $DESKTOP"
+    case "$DESKTOP" in
+        # ─── XFCE ───────────────────────────────────────────────────────────
+        xfce)
+            XFDESKTOP="/mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml"
+            if [[ -f "$XFDESKTOP" ]]; then
+                # patch in place: xfdesktop ships last-image defaults for every monitor
+                sed -i "s|\(name=\"last-image\" type=\"string\" value=\"\)[^\"]*|\1${WALL_DEST}|g" "$XFDESKTOP"
+            else
+                mkdir -p "$(dirname "$XFDESKTOP")"
+                cat <<EOF > "$XFDESKTOP"
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-desktop" version="1.0">
+  <property name="backdrop" type="empty">
+    <property name="screen0" type="empty">
+      <property name="monitor0" type="empty">
+        <property name="workspace0" type="empty">
+          <property name="color-style" type="int" value="0"/>
+          <property name="image-style" type="int" value="5"/>
+          <property name="last-image" type="string" value="${WALL_DEST}"/>
+        </property>
+      </property>
+    </property>
+  </property>
+</channel>
+EOF
+            fi
+            ;;
+        # ─── KDE Plasma ─────────────────────────────────────────────────────
+        kde)
+            # plasma reads system-wide defaults via KConfig cascade
+            cat <<EOF > /mnt/etc/xdg/plasma-org.kde.plasma.desktop-appletsrc
+[Containments][1]
+activityId=
+formfactor=0
+immutability=1
+lastScreen=0
+location=0
+plugin=org.kde.plasma.folder
+wallpaperplugin=org.kde.image
+
+[Containments][1][Wallpaper][org.kde.image][General]
+Image=file://${WALL_DEST}
+EOF
+            ;;
+        # ─── GNOME ──────────────────────────────────────────────────────────
+        gnome)
+            cat <<EOF > /mnt/etc/dconf/db/local.d/02-wallpaper
+[org/gnome/desktop/background]
+picture-uri='file://${WALL_DEST}'
+picture-uri-dark='file://${WALL_DEST}'
+picture-options='zoom'
+EOF
+            ;;
+        # ─── Cinnamon ───────────────────────────────────────────────────────
+        cinnamon)
+            cat <<EOF > /mnt/etc/dconf/db/local.d/02-wallpaper
+[org/cinnamon/desktop/background]
+picture-uri='file://${WALL_DEST}'
+picture-options='zoom'
+EOF
+            ;;
+        # ─── MATE ───────────────────────────────────────────────────────────
+        mate)
+            cat <<EOF > /mnt/etc/dconf/db/local.d/02-wallpaper
+[org/mate/background]
+picture-filename='${WALL_DEST}'
+picture-options='zoom'
+EOF
+            ;;
+        # ─── LXQt ───────────────────────────────────────────────────────────
+        lxqt)
+            mkdir -p /mnt/etc/xdg/pcmanfm-qt/lxqt
+            cat <<EOF > /mnt/etc/xdg/pcmanfm-qt/lxqt/settings.conf
+[Desktop]
+Wallpaper=${WALL_DEST}
+WallpaperMode=zoom
+EOF
+            ;;
+    esac
+
+    [[ "$DCONF_WALL" == true ]] && arch-chroot /mnt dconf update
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# [8.0] THEMING
 # ═══════════════════════════════════════════════════════════════════════════════
 if [[ "$DESKTOP" != "none" && "$DARK_THEME" == true ]]; then
-    sect "7.0" "Applying Themes"
+    sect "8.0" "Applying Themes"
 
     # ─── Papirus icons ────────────────────────────────────────────────────────
-    step "[7.1] Installing Papirus icon theme"
+    step "[8.1] Installing Papirus icon theme"
     THEME_PACKAGES=(papirus-icon-theme gnome-themes-extra)
     [[ "$EXTRA_THEMES" == true ]] && THEME_PACKAGES+=(qt5ct qt6ct)
     arch-chroot /mnt pacman -S --noconfirm "${THEME_PACKAGES[@]}"
@@ -657,7 +802,7 @@ if [[ "$DESKTOP" != "none" && "$DARK_THEME" == true ]]; then
 
     # ─── Adwaita AMOLED theme ─────────────────────────────────────────────────
     if [[ "$EXTRA_THEMES" == true ]]; then
-        step "[7.2] Installing Adwaita-AMOLED theme"
+        step "[8.2] Installing Adwaita-AMOLED theme"
         AMOLED_DIR="/usr/share/themes/Adwaita-AMOLED"
         mkdir -p "/mnt${AMOLED_DIR}"
         curl -fsSL "https://codeload.github.com/librerob/Adwaita-AMOLED/tar.gz/HEAD" \
@@ -705,7 +850,7 @@ EOF
     esac
 
     # ─── Desktop theme ────────────────────────────────────────────────────────
-    step "[7.3] Applying dark theme"
+    step "[8.3] Applying dark theme"
     case "$DESKTOP" in
         # ─── XFCE ───────────────────────────────────────────────────────────
         xfce)
@@ -835,7 +980,7 @@ EOF
     [[ "$DCONF_USED" == true ]] && arch-chroot /mnt dconf update
 
     # ─── Display manager theme ────────────────────────────────────────────────
-    step "[7.4] Applying theme to $DE_DM"
+    step "[8.4] Applying theme to $DE_DM"
     case "$DE_DM" in
         lightdm)
             mkdir -p /mnt/etc/lightdm
@@ -863,26 +1008,26 @@ EOF
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# [8.0] VIRTUALBOX GUEST UTILS
+# [9.0] VIRTUALBOX GUEST UTILS
 # ═══════════════════════════════════════════════════════════════════════════════
 if [[ "$VIRTUALBOX_GUEST_UTILS" == true ]]; then
-    sect "8.0" "VirtualBox Guest Utils"
+    sect "9.0" "VirtualBox Guest Utils"
 
     # ─── Guest utils ──────────────────────────────────────────────────────────
-    step "[8.1] Installing VirtualBox Guest Utils"
+    step "[9.1] Installing VirtualBox Guest Utils"
     arch-chroot /mnt pacman -S --noconfirm virtualbox-guest-utils
     arch-chroot /mnt systemctl enable vboxservice.service
     arch-chroot /mnt usermod -aG vboxsf "${USER_NAME}"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# [9.0] AUR HELPER
+# [10.0] AUR HELPER
 # ═══════════════════════════════════════════════════════════════════════════════
 if [[ "$AUR" == true ]]; then
-    sect "9.0" "AUR Helper"
+    sect "10.0" "AUR Helper"
 
     # ─── yay ──────────────────────────────────────────────────────────────────
-    step "[9.1] Installing yay"
+    step "[10.1] Installing yay"
     arch-chroot /mnt pacman -S --noconfirm --needed base-devel git
     arch-chroot /mnt sudo -u "${USER_NAME}" git clone --depth 1 https://aur.archlinux.org/yay-bin.git "/home/${USER_NAME}/yay-bin"
     arch-chroot /mnt bash -c "cd /home/${USER_NAME}/yay-bin && sudo -u ${USER_NAME} makepkg"
