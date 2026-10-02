@@ -330,7 +330,7 @@ LVM_PACKAGES=()
 [[ "$LVM" == true ]] && LVM_PACKAGES=(lvm2)
 pacstrap -K /mnt \
     base base-devel linux linux-headers linux-firmware dkms \
-    grub efibootmgr networkmanager pacman-contrib nano git vim sudo \
+    grub efibootmgr networkmanager pacman-contrib nano git gvim sudo \
     "${UCODE_PACKAGES[@]}" "${FS_PACKAGES[@]}" "${SWAP_PACKAGES[@]}" \
     "${LUKS_PACKAGES[@]}" "${LVM_PACKAGES[@]}" cronie lm_sensors
 
@@ -863,11 +863,10 @@ if [[ "$DESKTOP" != "none" && ( "$DARK_VARIANT" == true || "$ICONS_PAPIRUS" == t
     THEME_PACKAGES=()
     [[ "$ICONS_PAPIRUS" == true ]] && THEME_PACKAGES+=(papirus-icon-theme)
     if [[ "$DESKTOP" == "kde" ]]; then
-        # GTK apps under Plasma follow Breeze-Dark (both for dark and black)
         [[ "$DARK_VARIANT" == true ]] && THEME_PACKAGES+=(breeze-gtk)
     elif [[ "$THEME" == "dark" ]]; then
-        THEME_PACKAGES+=(gnome-themes-extra)                       # Adwaita-dark (GTK3)
-        [[ "$DESKTOP" == "mate" ]] && THEME_PACKAGES+=(mate-themes) # BlackMATE
+        THEME_PACKAGES+=(gnome-themes-extra)                       
+        [[ "$DESKTOP" == "mate" ]] && THEME_PACKAGES+=(mate-themes)
     elif [[ "$THEME" == "black" ]]; then
         [[ "$DESKTOP" != "lxqt" ]] && THEME_PACKAGES+=(qt5ct qt6ct)
     fi
@@ -881,63 +880,79 @@ if [[ "$DESKTOP" != "none" && ( "$DARK_VARIANT" == true || "$ICONS_PAPIRUS" == t
         [[ "$DARK_VARIANT" == true ]] && ICON_THEME="Papirus-Dark"
     fi
 
-    # ─── Breeze-Dark-OLED theme (KDE, black only) ─────────────────────────────
+    # ─── Black OLED color scheme (KDE, black only) ────────────────────────────
     if [[ "$THEME" == "black" && "$DESKTOP" == "kde" ]]; then
-        step "[8.2] Installing Breeze-Dark-OLED theme"
-        OLED_TMP=$(mktemp -d)
-        curl -fsSL "https://raw.githubusercontent.com/RazerPC/Breeze-Dark-OLED/main/Breeze-Dark-OLED.colors" \
-            -o "$OLED_TMP/Breeze-Dark-OLED.colors"
-        curl -fsSL "https://raw.githubusercontent.com/RazerPC/Breeze-Dark-OLED/main/Breeze-Dark-OLED-Plasma.tar.gz" \
-            -o "$OLED_TMP/Breeze-Dark-OLED-Plasma.tar.gz"
-        mkdir -p /mnt/usr/share/color-schemes /mnt/usr/share/plasma/desktoptheme
-        cp "$OLED_TMP/Breeze-Dark-OLED.colors" /mnt/usr/share/color-schemes/
-        tar -xzf "$OLED_TMP/Breeze-Dark-OLED-Plasma.tar.gz" \
-            -C /mnt/usr/share/plasma/desktoptheme/
-        # the theme targets Plasma 5: bump the API version so Plasma 6 loads it
-        OLED_META="/mnt/usr/share/plasma/desktoptheme/Breeze-Dark-OLED-Plasma/metadata.json"
-        [[ -f "$OLED_META" ]] && \
-            sed -i -E 's/"X-Plasma-API": *"5\.0"/"X-Plasma-API": "6.0"/' "$OLED_META"
-        rm -rf "$OLED_TMP"
+        step "[8.2] Installing Black OLED color scheme"
+        mkdir -p /mnt/usr/share/color-schemes
 
-        # look-and-feel package: this is what Plasma applies on first login
-        LNF_DIR="/mnt/usr/share/plasma/look-and-feel/org.kde.breezedark-oled.desktop"
-        mkdir -p "${LNF_DIR}/contents/defaults"
-        cat <<'EOF' > "${LNF_DIR}/metadata.json"
-{
-    "KPackageStructure": "Plasma/LookAndFeel",
-    "KPlugin": {
-        "Authors": [
-            {
-                "Name": "barch"
-            }
-        ],
-        "Description": "Breeze Dark with pure black OLED backgrounds",
-       "EnabledByDefault": true,
-        "Id": "org.kde.breezedark-oled.desktop",
-        "License": "LGPL-2.0-or-later",
-        "Name": "Breeze Dark OLED",
-        "Version": "1.0",
-        "Website": "https://kde.org"
-    },
-    "X-Plasma-API": "5.0"
-}
-EOF
-        cat <<EOF > "${LNF_DIR}/contents/defaults/kdeglobals"
-[General]
-ColorScheme=Breeze-Dark-OLED
+        # palette shared by every UI color set: pure black background, light text
+        OLED_PALETTE=$'BackgroundNormal=0,0,0\n'
+        OLED_PALETTE+=$'BackgroundAlternate=17,19,21\n'
+        OLED_PALETTE+=$'DecorationFocus=40,115,153\n'
+        OLED_PALETTE+=$'DecorationHover=27,80,106\n'
+        OLED_PALETTE+=$'ForegroundNormal=239,240,241\n'
+        OLED_PALETTE+=$'ForegroundInactive=189,195,199\n'
+        OLED_PALETTE+=$'ForegroundActive=61,174,233\n'
+        OLED_PALETTE+=$'ForegroundLink=41,128,185\n'
+        OLED_PALETTE+=$'ForegroundVisited=127,140,141\n'
+        OLED_PALETTE+=$'ForegroundNegative=218,68,83\n'
+        OLED_PALETTE+=$'ForegroundNeutral=246,116,0\n'
+        OLED_PALETTE+=$'ForegroundPositive=39,174,96'
 
-[KDE]
-widgetStyle=Breeze
+        {
+            printf '[General]\nColorScheme=BlackOLED\nName=Black OLED\nshadeSortColumn=true\n'
+            printf '\n[KDE]\ncontrast=4\n'
 
-[Icons]
-Theme=${ICON_THEME:-breeze}
+            for COLOR_SET in Button Complementary Header Tooltip View Window; do
+                printf '\n[Colors:%s]\n%s\n' "$COLOR_SET" "$OLED_PALETTE"
+            done
+
+            cat <<'EOF'
+
+[Colors:Selection]
+BackgroundNormal=26,77,102
+BackgroundAlternate=29,153,243
+DecorationFocus=40,115,153
+DecorationHover=27,80,106
+ForegroundNormal=239,240,241
+ForegroundInactive=239,240,241
+ForegroundActive=252,252,252
+ForegroundLink=253,188,75
+ForegroundVisited=189,195,199
+ForegroundNegative=218,68,83
+ForegroundNeutral=246,116,0
+ForegroundPositive=39,174,96
+
+[ColorEffects:Disabled]
+Color=56,56,56
+ColorAmount=0
+ColorEffect=0
+ContrastAmount=0.65
+ContrastEffect=1
+IntensityAmount=0.1
+IntensityEffect=2
+
+[WM]
+activeBackground=0,0,0
+activeBlend=255,255,255
+activeForeground=239,240,241
+inactiveBackground=0,0,0
+inactiveBlend=75,71,67
+inactiveForeground=127,140,141
 EOF
-        cat <<'EOF' > "${LNF_DIR}/contents/defaults/plasmarc"
-[Theme]
-name=Breeze-Dark-OLED-Plasma
-EOF
+        } > /mnt/usr/share/color-schemes/BlackOLED.colors
     fi
-
+    
+    
+	cp -r /mnt/usr/share/plasma/desktoptheme/breeze-dark \
+          /mnt/usr/share/plasma/desktoptheme/BlackOLED
+    cp /mnt/usr/share/color-schemes/BlackOLED.colors \
+       /mnt/usr/share/plasma/desktoptheme/BlackOLED/colors
+    sed -i \
+        -e 's|"Id": "breeze-dark"|"Id": "BlackOLED"|' \
+        -e 's|"Name": "Breeze Dark"|"Name": "Black OLED"|' \
+        /mnt/usr/share/plasma/desktoptheme/BlackOLED/metadata.json
+            
     # ─── Adwaita-AMOLED theme (GTK desktops, black only) ──────────────────────
     if [[ "$THEME" == "black" && "$DESKTOP" != "kde" ]]; then
         step "[8.3] Installing Adwaita-AMOLED theme"
@@ -1021,53 +1036,37 @@ EOF
 EOF
             fi
             ;;
-                # ─── KDE Plasma ─────────────────────────────────────────────────────
+        # ─── KDE Plasma ─────────────────────────────────────────────────────
         kde)
-            case "$THEME" in
-                black)
-                    KDE_COLORS="Breeze-Dark-OLED"              # /usr/share/color-schemes/Breeze-Dark-OLED.colors
-                    KDE_PLASMA_THEME="Breeze-Dark-OLED-Plasma" # /usr/share/plasma/desktoptheme/Breeze-Dark-OLED-Plasma
-                    KDE_LNF="org.kde.breezedark-oled.desktop"  # created in step 8.2
-                    ;;
-                dark)
-                    KDE_COLORS="BreezeDark"                    # /usr/share/color-schemes/BreezeDark.colors
-                    KDE_PLASMA_THEME="breeze-dark"             # /usr/share/plasma/desktoptheme/breeze-dark
-                    KDE_LNF="org.kde.breezedark.desktop"       # shipped by the breeze package
-                    ;;
-                *)
-                    KDE_COLORS=""
-                    KDE_PLASMA_THEME=""
-                    KDE_LNF="org.kde.breeze.desktop"
-                    ;;
-            esac
-
+            if [[ "$DARK_VARIANT" == true ]]; then
+                KDE_LNF="org.kde.breezedark.desktop"
+                KDE_COLORS="BreezeDark"
+                if [[ "$THEME" == "black" ]]; then
+                    KDE_COLORS="BlackOLED"
+                fi
+            else
+                KDE_LNF="org.kde.breeze.desktop"
+                KDE_COLORS=""
+            fi
             [[ -d "/mnt/usr/share/plasma/look-and-feel/${KDE_LNF}" ]] || \
                 echo -e "${YELLOW}[WARN]${NC} look-and-feel '${KDE_LNF}' not found"
-
-            # On first login Plasma applies the look-and-feel package named by
-            # LookAndFeelPackage; an invalid or missing name falls back to the
-            # default light breeze package, overriding other system defaults.
             {
-                echo "[KDE]"
-                echo "LookAndFeelPackage=${KDE_LNF}"
-                if [[ "$DARK_VARIANT" == true ]]; then
-                    echo "widgetStyle=Breeze"
-                    echo ""
-                    echo "[General]"
-                    echo "ColorScheme=${KDE_COLORS}"
+                if [[ -n "$KDE_COLORS" ]]; then
+                    cat "/mnt/usr/share/color-schemes/${KDE_COLORS}.colors"
                 fi
+                # KConfig merges this with the [KDE] group from the .colors file
+                printf '\n[KDE]\nLookAndFeelPackage=%s\nwidgetStyle=Breeze\n' "$KDE_LNF"
                 if [[ -n "$ICON_THEME" ]]; then
-                    echo ""
-                    echo "[Icons]"
-                    echo "Theme=${ICON_THEME}"
+                    printf '\n[Icons]\nTheme=%s\n' "$ICON_THEME"
                 fi
             } > /mnt/etc/xdg/kdeglobals
 
             if [[ "$DARK_VARIANT" == true ]]; then
-                # plasmarc: plasma shell theme (panels, widgets, popups)
+                # plasma style: dark panels and menus
+                KDE_PLASMA_THEME="breeze-dark"
+                [[ "$THEME" == "black" ]] && KDE_PLASMA_THEME="BlackOLED"
                 printf '[Theme]\nname=%s\n' "$KDE_PLASMA_THEME" > /mnt/etc/xdg/plasmarc
-
-                # GTK apps under Plasma
+                # GTK apps under KDE
                 mkdir -p /mnt/etc/gtk-3.0
                 cat <<EOF > /mnt/etc/gtk-3.0/settings.ini
 [Settings]
@@ -1077,8 +1076,6 @@ gtk-application-prefer-dark-theme=true
 EOF
             fi
 
-            # seed the user config too: guarantees the theme even if the
-            # first-login look-and-feel application does not run
             for HOME_DIR in "/mnt/etc/skel" "/mnt/home/${USER_NAME}"; do
                 mkdir -p "$HOME_DIR/.config"
                 cp /mnt/etc/xdg/kdeglobals "$HOME_DIR/.config/kdeglobals"
