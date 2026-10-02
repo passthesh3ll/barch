@@ -1,8 +1,6 @@
 # barch
 
-A basic Arch Linux installer in bash. Automates a complete installation from
-the live ISO: GPT partitioning, LUKS encryption, LVM, ext4 or btrfs, GRUB,
-and an optional desktop environment with theming.
+A basic, non-interactive, variable-driven Arch Linux installer in Bash. It automates a complete installation from the live ISO in a single run: GPT partitioning, LUKS encryption, LVM, ext4 or btrfs, GRUB, and an optional themed desktop environment.
 
 ## Usage
 Boot the Arch live ISO, then:
@@ -14,6 +12,11 @@ Boot the Arch live ISO, then:
     # install
     bash barch.sh
 ```
+
+## Demo
+Arch Installation in 3m 36s
+![demo](https://i.imgur.com/J40xhTj.gif)
+
 ## Variables
 
 All configuration is done via the variables at the top of the script.
