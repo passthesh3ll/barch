@@ -16,7 +16,7 @@ Boot the Arch live ISO, then:
 ## Demo
 Arch Installation in 3m 36s
 
-<img src="assets/demo.gif" alt="demo" width="700">
+<img src="assets/demo.gif" alt="demo">
 
 
 ## Variables
