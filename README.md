@@ -1,4 +1,4 @@
-# barch
+![image](https://i.postimg.cc/j2YQY2Nq/image.png)
 
 A basic, non-interactive, variable-driven Arch Linux installer in Bash. It automates a complete installation from the live ISO in a single run: GPT partitioning, LUKS encryption, LVM, ext4 or btrfs, GRUB, and an optional themed desktop environment.
 
