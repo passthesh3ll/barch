@@ -783,28 +783,41 @@ EOF
         # ─── XFCE ───────────────────────────────────────────────────────────
         xfce)
             XFDESKTOP="/mnt/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml"
-            if [[ -f "$XFDESKTOP" ]]; then
-                sed -i "s|\(name=\"last-image\" type=\"string\" value=\"\)[^\"]*|\1${WALL_DEST}|g" "$XFDESKTOP"
-            else
-                mkdir -p "$(dirname "$XFDESKTOP")"
-                cat <<EOF > "$XFDESKTOP"
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfce4-desktop" version="1.0">
-  <property name="backdrop" type="empty">
-    <property name="screen0" type="empty">
-      <property name="monitor0" type="empty">
-        <property name="workspace0" type="empty">
-          <property name="color-style" type="int" value="0"/>
+            mkdir -p "$(dirname "$XFDESKTOP")"
+            
+            WS_PROPS='          <property name="color-style" type="int" value="0"/>
           <property name="image-style" type="int" value="5"/>
-          <property name="last-image" type="string" value="${WALL_DEST}"/>
-        </property>
-      </property>
-    </property>
-  </property>
-</channel>
-EOF
-            fi
+          <property name="last-image" type="string" value="'"${WALL_DEST}"'"/>'
+
+            {
+                printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+                printf '<channel name="xfce4-desktop" version="1.0">\n'
+                printf '  <property name="backdrop" type="empty">\n'
+                printf '    <property name="screen0" type="empty">\n'
+
+                # Legacy format
+                printf '      <property name="monitor0" type="empty">\n'
+                printf '        <property name="image-path" type="string" value="%s"/>\n' "$WALL_DEST"
+                printf '        <property name="image-style" type="int" value="5"/>\n'
+                printf '        <property name="image-show" type="bool" value="true"/>\n'
+                printf '        <property name="workspace0" type="empty">\n%s\n        </property>\n' "$WS_PROPS"
+                printf '      </property>\n'
+
+                # Common connectors (QEMU/KVM, laptop, modern GPU)
+                for MON in Virtual-1 Virtual1 eDP-1 eDP1 DP-1 DP1 HDMI-1 HDMI1 VGA-1 VGA1; do
+                    printf '      <property name="monitor%s" type="empty">\n' "$MON"
+                    for WS in 0 1; do
+                        printf '        <property name="workspace%s" type="empty">\n%s\n        </property>\n' "$WS" "$WS_PROPS"
+                    done
+                    printf '      </property>\n'
+                done
+
+                printf '    </property>\n'
+                printf '  </property>\n'
+                printf '</channel>\n'
+            } > "$XFDESKTOP"
             ;;
+
         # ─── KDE Plasma ─────────────────────────────────────────────────────
         kde)
             sed -i '/<entry name="Image"/,/<\/entry>/ s|<default>[^<]*</default>|<default>file://'"${WALL_DEST}"'</default>|' \
@@ -941,10 +954,9 @@ inactiveBlend=75,71,67
 inactiveForeground=127,140,141
 EOF
         } > /mnt/usr/share/color-schemes/BlackOLED.colors
-    fi
     
-    
-	cp -r /mnt/usr/share/plasma/desktoptheme/breeze-dark \
+
+    cp -r /mnt/usr/share/plasma/desktoptheme/breeze-dark \
           /mnt/usr/share/plasma/desktoptheme/BlackOLED
     cp /mnt/usr/share/color-schemes/BlackOLED.colors \
        /mnt/usr/share/plasma/desktoptheme/BlackOLED/colors
@@ -952,6 +964,8 @@ EOF
         -e 's|"Id": "breeze-dark"|"Id": "BlackOLED"|' \
         -e 's|"Name": "Breeze Dark"|"Name": "Black OLED"|' \
         /mnt/usr/share/plasma/desktoptheme/BlackOLED/metadata.json
+
+    fi
             
     # ─── Adwaita-AMOLED theme (GTK desktops, black only) ──────────────────────
     if [[ "$THEME" == "black" && "$DESKTOP" != "kde" ]]; then
